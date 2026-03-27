@@ -1,0 +1,47 @@
+# Vedis — MCP Security Proxy Config
+# Full reference: https://vedis.dev/docs/config
+
+upstream:
+  # The MCP server command to proxy
+  command: npx
+  args:
+    - -y
+    - "@modelcontextprotocol/server-filesystem"
+    - "/tmp"
+
+scanner:
+  enabled: true
+  sensitivity: medium  # low | medium | high
+  action: block        # block | warn | log
+  # customPatterns:
+  #   - "my-custom-regex-pattern"
+
+policy:
+  tools:
+    # allowed: []      # Allowlist — empty means allow all
+    denied:
+      - execute_command
+      - run_shell
+      - delete_*
+    constrained:
+      - name: write_file
+        rules:
+          - path_must_match: "src/**"
+          - max_length: 50000
+
+filter:
+  enabled: true
+  pii: true            # Email, phone, SSN, credit card, internal IPs
+  secrets: true         # AWS keys, GitHub tokens, JWTs, private keys, etc
+  # customPatterns:
+  #   - name: internal_url
+  #     pattern: "https://internal\\.company\\.com/[^\\s]+"
+  #     replacement: "[INTERNAL_URL_REDACTED]"
+
+audit:
+  enabled: true
+  jsonl: vedis-audit.jsonl
+  # sqlite: vedis.db   # Optional — richer queries
+
+rateLimit:
+  requestsPerMinute: 120

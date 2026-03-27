@@ -1,0 +1,41 @@
+{
+  "name": "vedis",
+  "version": "0.1.0",
+  "description": "MCP-native agent security proxy. Sits between AI agents and MCP servers, applies security checks. One config change, zero code changes.",
+  "type": "module",
+  "bin": {
+    "vedis": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "mcp",
+    "security",
+    "proxy",
+    "ai-agent",
+    "prompt-injection",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "chalk": "^5.3.0",
+    "commander": "^12.0.0",
+    "yaml": "^2.4.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0"
+  }
+}
