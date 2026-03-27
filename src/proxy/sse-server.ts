@@ -3,12 +3,13 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import { MessageParser, serializeMessage, isRequest, isResponse } from './message.js';
-import type { JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, VedisConfig, ToolCallParams } from '../types.js';
+import type { JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, VedisConfig, ToolCallParams, AuditEntry } from '../types.js';
 import { Scanner } from '../middleware/scanner.js';
 import { PolicyEngine } from '../middleware/policy.js';
 import { OutputFilter } from '../middleware/filter.js';
 import { AuditLogger } from '../middleware/audit.js';
 import { RateLimiter } from '../middleware/rate-limiter.js';
+import { getDashboardHTML } from '../dashboard.js';
 
 interface Session {
   id: string;
@@ -25,6 +26,8 @@ export class SSEServer {
   private rateLimiter: RateLimiter;
   private config: VedisConfig;
   private sessions = new Map<string, Session>();
+  private recentLogs: AuditEntry[] = [];
+  private statsCounter = { scanned: 0, blocked: 0 };
 
   constructor(config: VedisConfig) {
     this.config = config;
@@ -91,12 +94,81 @@ export class SSEServer {
       res.end(JSON.stringify({
         activeSessions: this.sessions.size,
         uptime: process.uptime(),
+        scanned: this.statsCounter.scanned,
+        blocked: this.statsCounter.blocked,
       }));
+      return;
+    }
+
+    // Dashboard API: scan text
+    if (url.pathname === '/api/scan' && req.method === 'POST') {
+      this.handleAPIScan(req, res);
+      return;
+    }
+
+    // Dashboard API: recent audit logs
+    if (url.pathname === '/api/logs') {
+      const limit = parseInt(url.searchParams.get('limit') ?? '20', 10);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(this.recentLogs.slice(-limit).reverse()));
+      return;
+    }
+
+    // Dashboard API: config summary
+    if (url.pathname === '/api/config') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        scanner: this.config.scanner?.enabled ?? true,
+        sensitivity: this.config.scanner?.sensitivity ?? 'medium',
+        action: this.config.scanner?.action ?? 'block',
+        filter: this.config.filter?.enabled ?? true,
+        pii: this.config.filter?.pii ?? true,
+        secrets: this.config.filter?.secrets ?? true,
+        rateLimit: this.config.rateLimit?.requestsPerMinute ?? 120,
+      }));
+      return;
+    }
+
+    // Dashboard UI
+    if (url.pathname === '/' || url.pathname === '/dashboard') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(getDashboardHTML());
       return;
     }
 
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not found' }));
+  }
+
+  private handleAPIScan(req: IncomingMessage, res: ServerResponse): void {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const { text } = JSON.parse(body) as { text: string };
+        if (!text) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing text field' }));
+          return;
+        }
+        const result = this.scanner.scan(text);
+        this.statsCounter.scanned++;
+        if (result.blocked) this.statsCounter.blocked++;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(result));
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+      }
+    });
+  }
+
+  private trackAudit(entry: AuditEntry): void {
+    this.audit.log(entry);
+    this.recentLogs.push(entry);
+    if (this.recentLogs.length > 200) this.recentLogs.splice(0, this.recentLogs.length - 200);
+    this.statsCounter.scanned++;
+    if (entry.blocked) this.statsCounter.blocked++;
   }
 
   private handleSSEConnect(_req: IncomingMessage, res: ServerResponse): void {
@@ -229,7 +301,7 @@ export class SSEServer {
         if (scanResult.blocked) {
           const threatNames = scanResult.threats.map(t => t.type).join(', ');
           console.error(chalk.red(`[vedis] BLOCKED by scanner: ${toolName} — ${threatNames}`));
-          this.audit.log({
+          this.trackAudit({
             timestamp: new Date().toISOString(),
             direction: 'request',
             method: req.method,
@@ -270,7 +342,7 @@ export class SSEServer {
             resp.result = result;
           }
 
-          this.audit.log({
+          this.trackAudit({
             timestamp: new Date().toISOString(),
             direction: 'response',
             method: pending.method,
